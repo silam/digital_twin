@@ -1,6 +1,9 @@
 import os
 from openai import OpenAI
 import gradio as gr
+import uuid
+import chromadb
+from pprint import pprint
 
 #--------------------------------------------
 # Setup
@@ -174,17 +177,89 @@ May 1997 - May 2007 · 10 yrs 1 mo
 Plymouth, MN
 
 """
+f = open('./data/document_education.txt', 'r', encoding='utf-8')
+document_education = f.read()
 
+f = open('./data/document_overview.txt', 'r', encoding='utf-8')
+document_overview = f.read()
+
+f = open('./data/document_professional.txt', 'r', encoding='utf-8')
+document_professional = f.read()
 
 #--------------------------------------------
 # Chunk Function
 #--------------------------------------------
-
-
-
+#Split text into chunks
+def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
+    BOUNDARIES = ["\n\n","\n",". ", "? ", "! "," "]
+    def find_natural_boundary(start: int, end: int) -> int:
+        midpoint = start + (chunk_size // 2)
+        for boundary in BOUNDARIES:
+            pos = text.rfind(boundary, midpoint, end)
+            if pos != -1:
+                return pos + len(boundary)
+        return end
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        if end < len(text):
+            end = find_natural_boundary(start, end)
+        chunks.append(text[start:end])
+        if end >= len(text):
+            break
+        start = max(start + 1, end - overlap)
+    return chunks
 #--------------------------------------------
 # RAG
 #--------------------------------------------
+documents = [
+    {"text": document_education, "source":"Education"},
+    {"text": document_overview, "source":"personal life"},
+    {"text": document_professional, "source":"Professional Experiences"}
+
+]
+chunks = []
+ids = []
+metadatas = []
+for doc in documents:
+    chunks_ = split_text_into_chunks(doc["text"], chunk_size=300, overlap = 30)
+    ids_ = [str(uuid.uuid4()) for _ in range(len(chunks_))]
+    metadatas_ = [{"source":doc["source"], "chunk_index": i } for i in range(len(chunks_))]
+
+    print(str(ids_))
+    chunks.extend(chunks_)
+    ids.extend(ids_)
+    metadatas.extend(metadatas_)
+
+# Generate embedding
+response = client.embeddings.create(
+    model = "text-embedding-3-small",
+    input = chunks
+)
+
+
+embeddings = [item.embedding for item in response.data]
+print(f"Generated {len(embeddings)} embeddings")
+print(f"Each embedding has {len(embeddings[0])} dimension")
+
+
+
+chroma_client = chromadb.PersistentClient(path="./chroma_db_digital_twin")
+
+collection = chroma_client.get_or_create_collection(name="digital_twin")
+
+if collection.get()["ids"]:
+    collection.delete(collection.get()["ids"])
+
+
+#pprint(collection.get())
+collection.add(
+    ids=ids,
+    embeddings=embeddings,
+    documents=chunks,
+    metadatas=metadatas
+)
 
 #--------------------------------------------
 # System message
@@ -205,12 +280,26 @@ If the question is asked that is not answerable, say I don't know.
 #--------------------------------------------
 def response_ai(message, history):
     
-    system_message_enhanced = system_message + "\n\nContent:\n" + document_overview
+    response = client.embeddings.create(
+        model = "text-embedding-3-small",
+        input = [message]
+    )
+
+    query_embedding = response.data[0].embedding
+
+    results = collection.query(
+        query_embeddings = query_embedding,
+        n_results=3,
+        include = ["documents","metadatas"]
+    )
 
     print("\n====================================\n")
     print("**Retrived Chunks**")
-    print(system_message_enhanced)
-
+    for chunk, metadata in zip(results["documents"][0], results["metadatas"][0]):
+        print("----------------------------------------------------------------")
+        print(f"<<Document {metadata['source']} -- Chunk {metadata['chunk_index']}\n\n{chunk}\n\n")
+    
+    system_message_enhanced = system_message + "\n\nContent:\n" + "\n---\n".join(results["documents"][0])
     messages = [{"role":"system", "content": system_message_enhanced}] \
                + history \
                + [{"role":"user", "content": message}] 
