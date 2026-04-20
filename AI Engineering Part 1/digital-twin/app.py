@@ -4,6 +4,10 @@ import gradio as gr
 import uuid
 import chromadb
 from pprint import pprint
+import json
+import requests
+import random
+
 
 #--------------------------------------------
 # Setup
@@ -273,11 +277,47 @@ You can't get any more facts about Si Lam from the internet or make something up
 Here is the ONLY factual information about Si Lam
 
 If the question is asked that is not answerable, say I don't know.
+
+IMPORTANT: whenever you don't know something about Si Lam, always use send_notification tool to alert to Si Lam,
+do this automatically without asking the user.
 """
 
 #--------------------------------------------
 # Main response function
 #--------------------------------------------
+
+def handle_tool_call(tool_calls):
+    tools_results = []
+    # return what to add to our context (about tool call results, a dictionary)
+    for tool_call in tool_calls:
+        function_name = tool_call.function.name
+        #print(f"Calling function {function_name}")
+        args = json.loads(tool_call.function.arguments)
+
+        #Route to function name
+        if function_name == "send_notification":
+
+            content = send_notification(args['message'])
+            #print(f"Send notification: {args['message']}")
+            #content = f"Notitication sent: {args['message']}"
+        elif function_name == "dice_roll":
+
+            #print(f"Send notification: {args['message']}")
+            content = f"Rolled: {dice_roll()}"
+        else:
+            content = f"Unknown function {function_name}"
+
+        tool_call_result  = {
+            "role":"tool",
+            "content":content,
+            "tool_call_id":tool_call.id
+            
+        }
+
+        tools_results.append(tool_call_result)
+
+    return tools_results
+
 def response_ai(message, history):
     
     response = client.embeddings.create(
@@ -307,15 +347,100 @@ def response_ai(message, history):
     
     response = client.chat.completions.create(
         model = "gpt-4.1-mini",
-        messages= messages
-        # tools=tools,
-        # tool_choice="auto"
+        messages= messages,
+        tools=tools,
+        tool_choice="auto"
     )
 
     message = response.choices[0].message
-            
+    loop = 0
+    tool_count = len(message.tool_calls) if message is not None and message.tool_calls is not None else 0
+
+    pprint(f"Tools count: {tool_count}")
+    while message.tool_calls:
+        loop += 1
+        if (loop > tool_count): break
+        
+        #handle tool call
+        tool_result = handle_tool_call(message.tool_calls) #whole list of tools
+
+        #add message to context
+        messages.append(message)
+
+        #add info about tool call response to context, i.e. mesages
+        messages.extend(tool_result)
+
+        #invokde LLM one more time to get its updated response
+        response = client.chat.completions.create(
+            model='gpt-4.1-mini',
+            messages=messages,
+            tools=tools #will be in the future
+        )
+        message = response.choices[0].message
+
     return(message.content)
 
+#----------------------------------------------
+# Tools
+#-----------------------------------------------
+
+tools = []
+
+pushover_user  = os.getenv("PUSHOVER_USER")
+pushover_token = os.getenv("PUSHOVER_TOKEN")
+pushover_url   = "https://api.pushover.net/1/messages.json"
+
+
+
+def send_notification(message: str):
+    if pushover_token is None or pushover_user is None:
+        return ("Pushover credentials are not configured. Cannot send notification!")
+    
+    pay_load = {"user":pushover_user,
+                "token": pushover_token,
+                "message": message}
+    requests.post(pushover_url, data = pay_load)
+    return (f"Notification sent: {message}")
+
+send_notification_function = {
+
+    "name" : "send_notification",
+    "description": "Sends a push notification to the real Si Lam. Use this when:\
+                    1) Someone wants to get in touch, hire, or collaborate - ask for their name and contact details first, then send notification to Si Lam with the name and contact details.\
+                    2) You don't know the answer to a question about Si Lam - send AUTOMATICALLY without asking, include the question so he can add this info later.",
+    "parameters": {
+        "type": "object",
+        "properties":{
+            "message": {
+                "type": "string",
+                "description":"The notification message to send to user device"
+            }
+        },
+        "required": ["message"]
+    }
+}
+tools.append({"type": "function","function": send_notification_function})
+
+
+
+# simulate rolling a dice
+def dice_roll():
+    result = random.randint(1,6)
+    return result 
+
+roll_dice_function = {
+    "name" : "dice_roll",
+    "description": "Return a number by rolling a dice",
+    "parameters": {
+        "type": "object",
+        "properties":{
+            
+        },
+        "required": []
+    }
+}
+
+tools.append( {"type": "function","function": roll_dice_function})
 
 #--------------------------------------------
 # Launch
