@@ -445,4 +445,13 @@ tools.append( {"type": "function","function": roll_dice_function})
 #--------------------------------------------
 # Launch
 #--------------------------------------------
-gr.ChatInterface(fn=response_ai, autofocus=True, autoscroll=True, submit_btn=True, examples=["Hello","Certification","Education","Professional Experience"], title="Echo Bot").launch(inbrowser=True) #, share=True)
+gr.ChatInterface(
+    fn=response_ai, 
+    title=  "Si Lam's Digital Twin",
+    autofocus=True, 
+    autoscroll=True, 
+    submit_btn=True, 
+    chatbot= gr.Chatbot(avatar_images=(None, "SILAM.JPG")),
+    description="Chat with my digital twin about background, experience, education, sports, certifications",
+    examples = ["Show my your certifications","What is your background","Do you like soccer","What is your work experiences"]
+    ).launch(inbrowser=True) #, share=True)
